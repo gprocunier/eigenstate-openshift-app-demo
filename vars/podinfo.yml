@@ -1,0 +1,40 @@
+---
+demo_namespace: ipa-demo
+app_name: podinfo
+app_image: ghcr.io/stefanprodan/podinfo:6.7.1
+app_port: 9898
+service_name: podinfo
+route_name: podinfo
+route_fqdn: ""
+service_principal: ""
+dns_zone: ocp.workshop.lan
+dns_record_name: "*.apps"
+tls_secret: podinfo-idm-tls
+vault_name: podinfo-tls
+vault_shared: true
+
+ipa_server: "{{ lookup('env', 'IPA_SERVER') | default('idm-01.workshop.lan', true) }}"
+ipa_verify: "{{ lookup('env', 'IPA_CERT') | default('/etc/ipa/ca.crt', true) }}"
+ipaadmin_principal: "{{ lookup('env', 'IPA_ADMIN_PRINCIPAL') | default('admin', true) }}"
+ipaadmin_password: "{{ lookup('env', 'IPA_ADMIN_PASSWORD') | default(omit, true) }}"
+ipa_keytab: "{{ lookup('env', 'IPA_KEYTAB') | default(omit, true) }}"
+realm: "{{ lookup('env', 'REALM') | default('WORKSHOP.LAN', true) }}"
+
+support_lease_enabled: true
+lease_user: podinfo-support-autobot
+lease_group: podinfo-support
+lease_duration: "00:10"
+lease_ccache: /tmp/demo/krb5cc_podinfo-support
+support_password_vault: podinfo-support-cred
+validation_host: mirror-registry.workshop.lan
+validation_hbac_service: sshd
+support_sudo_rule: podinfo-support-validation
+
+demo_dir: /tmp/demo
+private_key_path: /tmp/demo/podinfo.key
+csr_path: /tmp/demo/podinfo.csr
+cert_path: /tmp/demo/podinfo.crt
+ca_path: /tmp/demo/podinfo-ca.crt
+bundle_path: /tmp/demo/podinfo-tls-bundle.yaml
+support_password_path: /tmp/demo/podinfo-support.pass
+bootstrap_keytab_path: /tmp/demo/podinfo-bootstrap.keytab

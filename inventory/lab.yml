@@ -1,0 +1,13 @@
+---
+all:
+  children:
+    bastion:
+      hosts:
+        bastion-01.workshop.lan:
+    ipaserver:
+      hosts:
+        idm-01.workshop.lan:
+    validation:
+      hosts:
+        mirror-registry.workshop.lan:
+

@@ -1,0 +1,62 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Validate podinfo HTTPS route and vault proof
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/podinfo.yml
+
+  tasks:
+    - name: Check route object
+      ansible.builtin.command:
+        argv:
+          - oc
+          - -n
+          - "{{ demo_namespace }}"
+          - get
+          - route
+          - "{{ route_name }}"
+      register: route_state
+      changed_when: false
+
+    - name: Validate /version endpoint over HTTPS
+      ansible.builtin.command:
+        argv:
+          - curl
+          - -skf
+          - "https://{{ route_fqdn }}/version"
+      register: version_response
+      changed_when: false
+
+    - name: Validate /metrics endpoint over HTTPS
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -skf "https://{{ route_fqdn }}/metrics" | sed -n '1,8p'
+      args:
+        executable: /bin/bash
+      register: metrics_response
+      changed_when: false
+
+    - name: Retrieve archived TLS bundle proof from IdM vault
+      ansible.builtin.set_fact:
+        vault_record: >-
+          {{ lookup('eigenstate.ipa.vault',
+                    vault_name,
+                    shared=vault_shared,
+                    server=ipa_server,
+                    ipaadmin_principal=ipaadmin_principal,
+                    ipaadmin_password=lookup('env', 'IPA_ADMIN_PASSWORD'),
+                    result_format='record',
+                    include_metadata=true,
+                    verify=ipa_verify) }}
+      no_log: true
+
+    - name: Show validation proof
+      ansible.builtin.debug:
+        msg:
+          - "{{ route_state.stdout }}"
+          - "version: {{ version_response.stdout }}"
+          - "metrics sample: {{ metrics_response.stdout_lines }}"
+          - "vault: {{ vault_name }} retrieved; payload hidden"

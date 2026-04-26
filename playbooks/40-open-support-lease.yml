@@ -1,0 +1,27 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Open support lease
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/podinfo.yml
+
+  tasks:
+    - name: Open short-lived support lease
+      eigenstate.ipa.user_lease:
+        username: "{{ lease_user }}"
+        principal_expiration: "{{ lease_duration }}"
+        password_expiration_matches_principal: true
+        require_groups:
+          - "{{ lease_group }}"
+        server: "{{ ipa_server }}"
+        ipaadmin_principal: "{{ ipaadmin_principal }}"
+        ipaadmin_password: "{{ lookup('env', 'IPA_ADMIN_PASSWORD') }}"
+        verify: "{{ ipa_verify }}"
+      register: lease_state
+
+    - name: Show lease boundary
+      ansible.builtin.debug:
+        msg: "Lease for {{ lease_user }} ends at {{ lease_state.lease_end }}"

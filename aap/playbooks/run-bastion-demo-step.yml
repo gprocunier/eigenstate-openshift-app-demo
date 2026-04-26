@@ -1,0 +1,67 @@
+---
+- name: Run one Eigenstate OpenShift app demo step on bastion
+  hosts: bastion
+  gather_facts: false
+
+  vars:
+    demo_repo_dir: "{{ demo_repo_dir_override | default('/home/cloud-user/eigenstate-openshift-app-demo') }}"
+    demo_vars_file: "{{ demo_vars_file_override | default('/tmp/demo/podinfo-vars.yml') }}"
+    demo_step_map:
+      deploy: playbooks/10-deploy-podinfo.yml
+      bootstrap: playbooks/00-bootstrap-idm.yml
+      identity_preflight: playbooks/15-preflight-identity.yml
+      onboard: playbooks/20-onboard-app-identity.yml
+      validate_route: playbooks/30-validate-route.yml
+      access_preflight: playbooks/35-preflight-access-policy.yml
+      open_lease: playbooks/40-open-support-lease.yml
+      validate_leased_access: playbooks/45-validate-leased-access.yml
+      expire_lease: playbooks/50-expire-support-lease.yml
+      cleanup: playbooks/90-cleanup-openshift.yml
+    oc_tools_glob: /opt/openshift/aws-metal-openshift-demo/generated/tools/*/bin
+
+  tasks:
+    - name: Require supported demo_step
+      ansible.builtin.assert:
+        that:
+          - demo_step is defined
+          - demo_step in demo_step_map
+        fail_msg: "demo_step must be one of: {{ demo_step_map.keys() | list | join(', ') }}"
+
+    - name: Run selected demo step through the bastion runtime
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd "{{ demo_repo_dir }}"
+
+        if ! command -v oc >/dev/null 2>&1; then
+          for tools_dir in {{ oc_tools_glob }}; do
+            if [[ -x "${tools_dir}/oc" ]]; then
+              export PATH="${tools_dir}:${PATH}"
+              break
+            fi
+          done
+        fi
+
+        if [[ -z "${KUBECONFIG:-}" && -r "${HOME}/etc/kubeconfig" ]]; then
+          export KUBECONFIG="${HOME}/etc/kubeconfig"
+        fi
+
+        if [[ -f requirements.yml ]]; then
+          ansible-galaxy collection install -r requirements.yml -p .ansible/collections
+        fi
+
+        ./prepare-demo.sh
+
+        export ANSIBLE_COLLECTIONS_PATH="${PWD}/.ansible/collections:${HOME}/.ansible/collections:/usr/share/ansible/collections:/usr/local/share/ansible/collections"
+        ansible-playbook -i 'localhost,' -e "@{{ demo_vars_file }}" "{{ demo_step_map[demo_step] }}"
+      args:
+        executable: /bin/bash
+      environment:
+        LAB_DEFAULT_PASSWORD: "{{ lookup('env', 'LAB_DEFAULT_PASSWORD') }}"
+        IPA_ADMIN_PASSWORD: "{{ lookup('env', 'IPA_ADMIN_PASSWORD') | default(lookup('env', 'LAB_DEFAULT_PASSWORD'), true) }}"
+        SUPPORT_USER_PASSWORD: "{{ lookup('env', 'SUPPORT_USER_PASSWORD') | default(lookup('env', 'LAB_DEFAULT_PASSWORD'), true) }}"
+      register: demo_step_run
+      changed_when: demo_step_run.rc == 0
+
+    - name: Show selected demo step output
+      ansible.builtin.debug:
+        var: demo_step_run.stdout_lines

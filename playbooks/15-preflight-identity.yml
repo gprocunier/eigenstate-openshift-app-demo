@@ -1,0 +1,58 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Preflight IdM application identity
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/podinfo.yml
+
+  tasks:
+    - name: Query IdM DNS wildcard record
+      ansible.builtin.set_fact:
+        dns_state: >-
+          {{ lookup('eigenstate.ipa.dns',
+                    dns_record_name,
+                    zone=dns_zone,
+                    server=ipa_server,
+                    ipaadmin_password=lookup('env', 'IPA_ADMIN_PASSWORD'),
+                    verify=ipa_verify) }}
+
+    - name: Query HTTP service principal state
+      ansible.builtin.set_fact:
+        principal_state: >-
+          {{ lookup('eigenstate.ipa.principal',
+                    service_principal,
+                    server=ipa_server,
+                    ipaadmin_principal=ipaadmin_principal,
+                    ipaadmin_password=lookup('env', 'IPA_ADMIN_PASSWORD'),
+                    verify=ipa_verify) }}
+
+    - name: Retrieve service keytab metadata
+      ansible.builtin.set_fact:
+        keytab_record: >-
+          {{ query('eigenstate.ipa.keytab',
+                   service_principal,
+                   server=ipa_server,
+                   ipaadmin_principal=ipaadmin_principal,
+                   ipaadmin_password=lookup('env', 'IPA_ADMIN_PASSWORD'),
+                   result_format='record',
+                   verify=ipa_verify) | first }}
+      no_log: true
+
+    - name: Assert identity preflight passed
+      ansible.builtin.assert:
+        that:
+          - dns_state.exists | bool
+          - principal_state.exists | bool
+          - principal_state.has_keytab | bool
+          - keytab_record.value | length > 0
+        fail_msg: "IdM DNS, service principal, or keytab preflight failed."
+
+    - name: Show identity proof
+      ansible.builtin.debug:
+        msg:
+          - "DNS: {{ dns_state.name }}.{{ dns_state.zone }} -> {{ dns_state.records | default({}) }}"
+          - "Principal: {{ principal_state.canonical | default(service_principal) }} [active]"
+          - "Keytab: retrieved {{ keytab_record.value | length }} base64 characters; content not displayed"

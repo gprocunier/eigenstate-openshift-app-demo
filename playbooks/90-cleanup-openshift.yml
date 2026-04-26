@@ -1,0 +1,27 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Clean up OpenShift podinfo demo
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/podinfo.yml
+
+  tasks:
+    - name: Delete demo namespace
+      ansible.builtin.command:
+        argv:
+          - oc
+          - delete
+          - project
+          - "{{ demo_namespace }}"
+          - --ignore-not-found=true
+      register: delete_project
+      changed_when: "'deleted' in delete_project.stdout"
+
+    - name: Remove runtime demo files
+      ansible.builtin.file:
+        path: "{{ demo_dir }}"
+        state: absent
+

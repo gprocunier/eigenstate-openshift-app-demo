@@ -1,0 +1,66 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Validate leased support access from mirror-registry
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/podinfo.yml
+
+  tasks:
+    - name: Retrieve support user password from IdM vault
+      ansible.builtin.set_fact:
+        support_password: >-
+          {{ lookup('eigenstate.ipa.vault',
+                    support_password_vault,
+                    shared=true,
+                    server=ipa_server,
+                    ipaadmin_principal=ipaadmin_principal,
+                    ipaadmin_password=lookup('env', 'IPA_ADMIN_PASSWORD'),
+                    verify=ipa_verify) }}
+      no_log: true
+
+    - name: Destroy stale support ticket cache
+      ansible.builtin.command:
+        argv:
+          - kdestroy
+      environment:
+        KRB5CCNAME: "FILE:{{ lease_ccache }}"
+      failed_when: false
+      changed_when: false
+
+    - name: Get fresh Kerberos ticket for leased support user
+      ansible.builtin.shell: |
+        set -euo pipefail
+        printf '%s\n' "$SUPPORT_PASSWORD" | kinit "$LEASE_PRINCIPAL"
+      args:
+        executable: /bin/bash
+      environment:
+        KRB5CCNAME: "FILE:{{ lease_ccache }}"
+        SUPPORT_PASSWORD: "{{ support_password }}"
+        LEASE_PRINCIPAL: "{{ lease_user }}@{{ realm }}"
+      no_log: true
+      changed_when: true
+
+    - name: Validate over SSH from the leased support identity
+      ansible.builtin.shell: |
+        set -euo pipefail
+        KRB5CCNAME="FILE:{{ lease_ccache }}" \
+          ssh \
+          -o GSSAPIAuthentication=yes \
+          -o GSSAPIDelegateCredentials=yes \
+          -o PreferredAuthentications=gssapi-with-mic \
+          -o StrictHostKeyChecking=no \
+          -o UserKnownHostsFile=/dev/null \
+          "{{ lease_user }}@{{ validation_host }}" \
+          'printf "whoami: "; whoami; printf "version: "; curl -skf https://{{ route_fqdn }}/version'
+      args:
+        executable: /bin/bash
+      register: leased_ssh
+      changed_when: false
+
+    - name: Show leased access proof
+      ansible.builtin.debug:
+        msg: "{{ leased_ssh.stdout_lines }}"
+

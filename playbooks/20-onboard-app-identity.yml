@@ -1,0 +1,129 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Issue IdM certificate and attach route TLS
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/podinfo.yml
+
+  tasks:
+    - name: Ensure demo runtime directory exists
+      ansible.builtin.file:
+        path: "{{ demo_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Generate route private key
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - genrsa
+          - -out
+          - "{{ private_key_path }}"
+          - "2048"
+        creates: "{{ private_key_path }}"
+      no_log: true
+
+    - name: Lock down route private key permissions
+      ansible.builtin.file:
+        path: "{{ private_key_path }}"
+        mode: "0600"
+
+    - name: Generate route CSR
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -new
+          - -key
+          - "{{ private_key_path }}"
+          - -out
+          - "{{ csr_path }}"
+          - -subj
+          - "/CN={{ route_fqdn }}"
+          - -addext
+          - "subjectAltName=DNS:{{ route_fqdn }}"
+        creates: "{{ csr_path }}"
+
+    - name: Request IdM-signed route certificate
+      ansible.builtin.set_fact:
+        cert_record: >-
+          {{ query('eigenstate.ipa.cert',
+                   service_principal,
+                   operation='request',
+                   csr_file=csr_path,
+                   server=ipa_server,
+                   ipaadmin_principal=ipaadmin_principal,
+                   ipaadmin_password=lookup('env', 'IPA_ADMIN_PASSWORD'),
+                   result_format='record',
+                   verify=ipa_verify) | first }}
+
+    - name: Write signed certificate
+      ansible.builtin.copy:
+        dest: "{{ cert_path }}"
+        mode: "0644"
+        content: "{{ cert_record.value }}"
+
+    - name: Copy IdM CA certificate for route chain
+      ansible.builtin.copy:
+        src: "{{ ipa_verify }}"
+        dest: "{{ ca_path }}"
+        mode: "0644"
+
+    - name: Archive TLS bundle in IdM vault
+      eigenstate.ipa.vault_write:
+        name: "{{ vault_name }}"
+        state: archived
+        shared: "{{ vault_shared }}"
+        description: "TLS bundle for {{ route_fqdn }}"
+        data: "{{ tls_bundle | to_nice_yaml }}"
+        server: "{{ ipa_server }}"
+        ipaadmin_principal: "{{ ipaadmin_principal }}"
+        verify: "{{ ipa_verify }}"
+      vars:
+        tls_bundle:
+          app: "{{ app_name }}"
+          namespace: "{{ demo_namespace }}"
+          route_fqdn: "{{ route_fqdn }}"
+          service_principal: "{{ service_principal }}"
+          serial_number: "{{ cert_record.metadata.serial_number | default('unknown') }}"
+          issuer: "{{ cert_record.metadata.issuer | default('unknown') }}"
+          subject: "{{ cert_record.metadata.subject | default('unknown') }}"
+          not_before: "{{ cert_record.metadata.valid_not_before | default('unknown') }}"
+          not_after: "{{ cert_record.metadata.valid_not_after | default('unknown') }}"
+          certificate: "{{ lookup('file', cert_path) }}"
+          private_key: "{{ lookup('file', private_key_path) }}"
+          ca_certificate: "{{ lookup('file', ca_path) }}"
+      no_log: true
+
+    - name: Patch OpenShift route with IdM-issued TLS material
+      ansible.builtin.command:
+        argv:
+          - oc
+          - -n
+          - "{{ demo_namespace }}"
+          - patch
+          - route
+          - "{{ route_name }}"
+          - --type=merge
+          - -p
+          - "{{ route_patch | to_json }}"
+      vars:
+        route_patch:
+          spec:
+            tls:
+              termination: edge
+              certificate: "{{ lookup('file', cert_path) }}"
+              key: "{{ lookup('file', private_key_path) }}"
+              caCertificate: "{{ lookup('file', ca_path) }}"
+      no_log: true
+      changed_when: true
+
+    - name: Show onboarding proof
+      ansible.builtin.debug:
+        msg:
+          - "Certificate serial: {{ cert_record.metadata.serial_number | default('unknown') }}"
+          - "Vault: {{ vault_name }}"
+          - "Route: https://{{ route_fqdn }}"

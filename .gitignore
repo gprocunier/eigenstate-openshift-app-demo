@@ -1,0 +1,13 @@
+.ansible/
+.cache/
+.pytest_cache/
+*.retry
+*.log
+*.tar.gz
+tmp/
+*.key
+*.keytab
+*.crt
+*.csr
+*.pem
+*-vars.yml

@@ -1,0 +1,280 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Bootstrap IdM objects for the podinfo demo
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/podinfo.yml
+
+  vars:
+    support_user_password: >-
+      {{
+        lookup('env', 'SUPPORT_USER_PASSWORD')
+        | default(lookup('env', 'LAB_DEFAULT_PASSWORD'), true)
+      }}
+
+  tasks:
+    - name: Assert route identity inputs are present
+      ansible.builtin.assert:
+        that:
+          - route_fqdn | length > 0
+          - service_principal | length > 0
+        fail_msg: "Run prepare-demo.sh or pass route_fqdn and service_principal."
+
+    - name: Check for existing Kerberos ticket
+      ansible.builtin.command:
+        argv:
+          - klist
+          - -s
+      register: klist_check
+      failed_when: false
+      changed_when: false
+
+    - name: Acquire admin Kerberos ticket from IPA_ADMIN_PASSWORD
+      ansible.builtin.shell: |
+        set -euo pipefail
+        printf '%s\n' "$IPA_ADMIN_PASSWORD" | kinit "$IPA_ADMIN_PRINCIPAL"
+      args:
+        executable: /bin/bash
+      environment:
+        IPA_ADMIN_PASSWORD: "{{ lookup('env', 'IPA_ADMIN_PASSWORD') }}"
+        IPA_ADMIN_PRINCIPAL: "{{ ipaadmin_principal }}"
+      no_log: true
+      changed_when: true
+      when:
+        - klist_check.rc != 0
+        - lookup('env', 'IPA_ADMIN_PASSWORD') | length > 0
+
+    - name: Assert Kerberos ticket is available for IPA CLI bootstrap
+      ansible.builtin.command:
+        argv:
+          - klist
+          - -s
+      changed_when: false
+
+    - name: Ensure demo runtime directory exists
+      ansible.builtin.file:
+        path: "{{ demo_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Ensure route host object exists in IdM
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - host-add
+          - "{{ route_fqdn }}"
+          - --force
+      register: host_add
+      changed_when: "'Added host' in host_add.stdout"
+      failed_when:
+        - host_add.rc != 0
+        - "'already exists' not in host_add.stderr"
+
+    - name: Ensure HTTP service principal exists in IdM
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - service-add
+          - "{{ service_principal }}"
+          - --force
+      register: service_add
+      changed_when: "'Added service' in service_add.stdout"
+      failed_when:
+        - service_add.rc != 0
+        - "'already exists' not in service_add.stderr"
+
+    - name: Allow admin to retrieve the demo service keytab
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - service-allow-retrieve-keytab
+          - "{{ service_principal }}"
+          - "--users={{ ipaadmin_principal }}"
+      register: allow_admin_retrieve
+      changed_when: "'Number of members added 1' in allow_admin_retrieve.stdout"
+      failed_when:
+        - allow_admin_retrieve.rc != 0
+        - "'This entry is already a member' not in allow_admin_retrieve.stderr"
+
+    - name: Try to retrieve existing service keytab
+      ansible.builtin.command:
+        argv:
+          - ipa-getkeytab
+          - -r
+          - -s
+          - "{{ ipa_server }}"
+          - -p
+          - "{{ service_principal }}"
+          - -k
+          - "{{ bootstrap_keytab_path }}"
+      register: retrieve_keytab
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: Generate initial service keytab when no keys exist
+      ansible.builtin.command:
+        argv:
+          - ipa-getkeytab
+          - -s
+          - "{{ ipa_server }}"
+          - -p
+          - "{{ service_principal }}"
+          - -k
+          - "{{ bootstrap_keytab_path }}"
+      when: retrieve_keytab.rc != 0
+      no_log: true
+      changed_when: true
+
+    - name: Lock down bootstrap keytab
+      ansible.builtin.file:
+        path: "{{ bootstrap_keytab_path }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Ensure support group exists
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - group-add
+          - "{{ lease_group }}"
+          - "--desc=Podinfo support lease users"
+      register: group_add
+      changed_when: "'Added group' in group_add.stdout"
+      failed_when:
+        - group_add.rc != 0
+        - "'already exists' not in group_add.stderr"
+
+    - name: Ensure support user exists
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - user-add
+          - "{{ lease_user }}"
+          - --first=Podinfo
+          - --last=Support
+          - --shell=/bin/bash
+      register: user_add
+      changed_when: "'Added user' in user_add.stdout"
+      failed_when:
+        - user_add.rc != 0
+        - "'already exists' not in user_add.stderr"
+
+    - name: Ensure support user is in support group
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - group-add-member
+          - "{{ lease_group }}"
+          - "--users={{ lease_user }}"
+      register: member_add
+      changed_when: "'Number of members added 1' in member_add.stdout"
+      failed_when:
+        - member_add.rc != 0
+        - "'This entry is already a member' not in member_add.stderr"
+
+    - name: Set support user password when supplied
+      ansible.builtin.shell: |
+        set -euo pipefail
+        printf '%s\n%s\n' "$SUPPORT_USER_PASSWORD" "$SUPPORT_USER_PASSWORD" \
+          | ipa passwd "$LEASE_USER" >/dev/null
+      args:
+        executable: /bin/bash
+      environment:
+        SUPPORT_USER_PASSWORD: "{{ support_user_password }}"
+        LEASE_USER: "{{ lease_user }}"
+      no_log: true
+      changed_when: true
+      when: support_user_password | length > 0
+
+    - name: Archive support user password when supplied
+      eigenstate.ipa.vault_write:
+        name: "{{ support_password_vault }}"
+        state: archived
+        shared: true
+        data: "{{ support_user_password }}"
+        description: "Password for {{ lease_user }} in the podinfo demo"
+        server: "{{ ipa_server }}"
+        ipaadmin_principal: "{{ ipaadmin_principal }}"
+        verify: "{{ ipa_verify }}"
+      no_log: true
+      when: support_user_password | length > 0
+
+    - name: Ensure HBAC rule exists
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - hbacrule-add
+          - podinfo-support-ssh
+          - "--desc=Allow podinfo support lease validation over SSH"
+      register: hbac_add
+      changed_when: "'Added HBAC rule' in hbac_add.stdout"
+      failed_when:
+        - hbac_add.rc != 0
+        - "'already exists' not in hbac_add.stderr"
+
+    - name: Ensure HBAC user scope
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - hbacrule-add-user
+          - podinfo-support-ssh
+          - "--groups={{ lease_group }}"
+      register: hbac_user
+      changed_when: "'Number of members added 1' in hbac_user.stdout"
+      failed_when:
+        - hbac_user.rc != 0
+        - "'This entry is already a member' not in hbac_user.stderr"
+
+    - name: Ensure HBAC host scope
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - hbacrule-add-host
+          - podinfo-support-ssh
+          - "--hosts={{ validation_host }}"
+      register: hbac_host
+      changed_when: "'Number of members added 1' in hbac_host.stdout"
+      failed_when:
+        - hbac_host.rc != 0
+        - "'This entry is already a member' not in hbac_host.stderr"
+
+    - name: Ensure HBAC service scope
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - hbacrule-add-service
+          - podinfo-support-ssh
+          - "--hbacsvcs={{ validation_hbac_service }}"
+      register: hbac_service
+      changed_when: "'Number of members added 1' in hbac_service.stdout"
+      failed_when:
+        - hbac_service.rc != 0
+        - "'This entry is already a member' not in hbac_service.stderr"
+
+    - name: Ensure sudo rule exists
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - sudorule-add
+          - "{{ support_sudo_rule }}"
+          - "--desc=Podinfo support validation command scope"
+      register: sudo_rule_add
+      changed_when: "'Added Sudo Rule' in sudo_rule_add.stdout"
+      failed_when:
+        - sudo_rule_add.rc != 0
+        - "'already exists' not in sudo_rule_add.stderr"
+
+    - name: Show bootstrap summary
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ route_fqdn }}"
+          - "Service principal: {{ service_principal }}"
+          - "Service keytab: initialized for preflight retrieval"
+          - "Vault: {{ vault_name }}"
+          - "Support user: {{ lease_user }}"
+          - "HBAC: podinfo-support-ssh"
+          - "Sudo: {{ support_sudo_rule }}"

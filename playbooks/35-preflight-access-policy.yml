@@ -1,0 +1,47 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Preflight support access policy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/podinfo.yml
+
+  tasks:
+    - name: Test HBAC access for leased support user
+      ansible.builtin.set_fact:
+        hbac_access: >-
+          {{ lookup('eigenstate.ipa.hbacrule',
+                    lease_user,
+                    operation='test',
+                    targethost=validation_host,
+                    service=validation_hbac_service,
+                    server=ipa_server,
+                    ipaadmin_principal=ipaadmin_principal,
+                    ipaadmin_password=lookup('env', 'IPA_ADMIN_PASSWORD'),
+                    verify=ipa_verify) }}
+
+    - name: Read support sudo rule
+      ansible.builtin.set_fact:
+        sudo_rule: >-
+          {{ lookup('eigenstate.ipa.sudo',
+                    support_sudo_rule,
+                    sudo_object='rule',
+                    server=ipa_server,
+                    ipaadmin_principal=ipaadmin_principal,
+                    ipaadmin_password=lookup('env', 'IPA_ADMIN_PASSWORD'),
+                    verify=ipa_verify) }}
+
+    - name: Assert access policy preflight passed
+      ansible.builtin.assert:
+        that:
+          - not hbac_access.denied | bool
+          - sudo_rule.exists | bool
+        fail_msg: "HBAC or sudo policy preflight failed."
+
+    - name: Show access policy proof
+      ansible.builtin.debug:
+        msg:
+          - "HBAC: {{ lease_user }} -> {{ validation_host }} [ALLOWED by {{ hbac_access.matched | join(', ') }}]"
+          - "Sudo: {{ support_sudo_rule }} exists={{ sudo_rule.exists }} enabled={{ sudo_rule.enabled | default('unknown') }}"

@@ -1,0 +1,62 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Expire support lease
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/podinfo.yml
+
+  tasks:
+    - name: Expire support principal and password
+      eigenstate.ipa.user_lease:
+        username: "{{ lease_user }}"
+        state: expired
+        password_expiration_matches_principal: true
+        require_groups:
+          - "{{ lease_group }}"
+        server: "{{ ipa_server }}"
+        ipaadmin_principal: "{{ ipaadmin_principal }}"
+        ipaadmin_password: "{{ lookup('env', 'IPA_ADMIN_PASSWORD') }}"
+        verify: "{{ ipa_verify }}"
+
+    - name: Destroy support ticket cache
+      ansible.builtin.command:
+        argv:
+          - kdestroy
+      environment:
+        KRB5CCNAME: "FILE:{{ lease_ccache }}"
+      failed_when: false
+      changed_when: false
+
+    - name: Retrieve support user password from IdM vault
+      ansible.builtin.set_fact:
+        support_password: >-
+          {{ lookup('eigenstate.ipa.vault',
+                    support_password_vault,
+                    shared=true,
+                    server=ipa_server,
+                    ipaadmin_principal=ipaadmin_principal,
+                    ipaadmin_password=lookup('env', 'IPA_ADMIN_PASSWORD'),
+                    verify=ipa_verify) }}
+      no_log: true
+
+    - name: Prove fresh support kinit now fails when password is available
+      ansible.builtin.shell: |
+        set -euo pipefail
+        printf '%s\n' "$SUPPORT_PASSWORD" | kinit "$LEASE_PRINCIPAL"
+      args:
+        executable: /bin/bash
+      environment:
+        KRB5CCNAME: "FILE:{{ lease_ccache }}"
+        SUPPORT_PASSWORD: "{{ support_password }}"
+        LEASE_PRINCIPAL: "{{ lease_user }}@{{ realm }}"
+      register: expired_kinit
+      failed_when: expired_kinit.rc == 0
+      changed_when: false
+      no_log: true
+
+    - name: Show expiry proof
+      ansible.builtin.debug:
+        msg: "Fresh kinit for {{ lease_user }} fails after IdM expiry."
