@@ -14,9 +14,25 @@ Build and publish the EE image before controller setup:
 ```bash
 ansible-builder build \
   -f execution-environment/execution-environment.yml \
-  -t ghcr.io/gprocunier/eigenstate-openshift-app-demo-ee:latest \
-  .
-podman push ghcr.io/gprocunier/eigenstate-openshift-app-demo-ee:latest
+  --build-arg PKGMGR=/usr/bin/microdnf \
+  --build-arg PYCMD=/usr/bin/python3.12 \
+  -t eigenstate-openshift-app-demo-ee:latest
+```
+
+The included EE definition uses the supported AAP minimal RHEL 9 execution
+environment base. Build hosts must provide RHEL 9 package content that includes
+`ipa-client`, `python3-ipaclient`, and `python3-ipalib`; the stock UBI repos
+visible inside the base image only provide the generic Kerberos client tools.
+Use a subscribed RHEL build host, mounted entitlements, or a mirrored RHEL 9
+content source when building the image. Keep `PYCMD=/usr/bin/python3.12` so
+ansible-builder uses the AAP Python runtime after RHEL packages install
+`/usr/bin/python3`.
+
+In the lab, build on an entitled host and push the image to the OpenShift
+integrated registry in the `aap` namespace. AAP pulls the image by default from:
+
+```text
+image-registry.openshift-image-registry.svc:5000/aap/eigenstate-openshift-app-demo-ee:latest
 ```
 
 For disconnected or mirrored builds, pass a reachable OpenShift client tarball:
@@ -25,8 +41,9 @@ For disconnected or mirrored builds, pass a reachable OpenShift client tarball:
 ansible-builder build \
   -f execution-environment/execution-environment.yml \
   --build-arg OPENSHIFT_CLIENT_TARBALL_URL=https://example.invalid/openshift-client-linux.tar.gz \
-  -t ghcr.io/gprocunier/eigenstate-openshift-app-demo-ee:latest \
-  .
+  --build-arg PKGMGR=/usr/bin/microdnf \
+  --build-arg PYCMD=/usr/bin/python3.12 \
+  -t eigenstate-openshift-app-demo-ee:latest
 ```
 
 Override the image name during setup when needed:
@@ -59,7 +76,7 @@ Defaults:
 
 - controller URL: `https://aap.apps.ocp.workshop.lan`
 - Git repository: `https://github.com/gprocunier/eigenstate-openshift-app-demo.git`
-- execution environment image: `ghcr.io/gprocunier/eigenstate-openshift-app-demo-ee:latest`
+- execution environment image: `image-registry.openshift-image-registry.svc:5000/aap/eigenstate-openshift-app-demo-ee:latest`
 - workflow: `eigenstate podinfo governed onboarding`
 
 The setup script creates:

@@ -5,6 +5,7 @@
 *.log
 *.tar.gz
 tmp/
+context/
 *.key
 *.keytab
 *.crt

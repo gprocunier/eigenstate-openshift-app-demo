@@ -1,4 +1,3 @@
-curl [platform:rpm]
 findutils [platform:rpm]
 gzip [platform:rpm]
 ipa-client [platform:rpm]

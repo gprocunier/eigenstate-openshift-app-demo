@@ -9,7 +9,7 @@ INVENTORY_NAME="${INVENTORY_NAME:-eigenstate podinfo demo}"
 PROJECT_NAME="${PROJECT_NAME:-eigenstate podinfo demo project}"
 WORKFLOW_NAME="${WORKFLOW_NAME:-eigenstate podinfo governed onboarding}"
 EE_NAME="${EE_NAME:-eigenstate podinfo demo EE}"
-EE_IMAGE="${EE_IMAGE:-ghcr.io/gprocunier/eigenstate-openshift-app-demo-ee:latest}"
+EE_IMAGE="${EE_IMAGE:-image-registry.openshift-image-registry.svc:5000/aap/eigenstate-openshift-app-demo-ee:latest}"
 EE_PULL_POLICY="${EE_PULL_POLICY:-missing}"
 LAB_CREDENTIAL_TYPE_NAME="${LAB_CREDENTIAL_TYPE_NAME:-Eigenstate Demo Lab Password}"
 LAB_CREDENTIAL_NAME="${LAB_CREDENTIAL_NAME:-eigenstate demo lab password}"
@@ -368,7 +368,21 @@ host_payload="$(jq -n \
       ansible_python_interpreter: "{{ ansible_playbook_python }}"
     } | tostring)
   }')"
-upsert_named hosts localhost "${host_payload}" >/dev/null
+host_id="$(get_named_id hosts localhost)"
+if [[ -n "${host_id}" ]]; then
+  host_update_payload="$(jq -n \
+    --arg name localhost \
+    '{
+      name: $name,
+      variables: ({
+        ansible_connection: "local",
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      } | tostring)
+    }')"
+  api PATCH "/hosts/${host_id}/" "${host_update_payload}" >/dev/null
+else
+  api POST /hosts/ "${host_payload}" >/dev/null
+fi
 
 project_payload="$(jq -n \
   --arg name "${PROJECT_NAME}" \

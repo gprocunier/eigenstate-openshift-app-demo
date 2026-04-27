@@ -79,13 +79,28 @@ Build and publish the demo EE image first:
 ```bash
 ansible-builder build \
   -f execution-environment/execution-environment.yml \
-  -t ghcr.io/gprocunier/eigenstate-openshift-app-demo-ee:latest \
-  .
-podman push ghcr.io/gprocunier/eigenstate-openshift-app-demo-ee:latest
+  --build-arg PKGMGR=/usr/bin/microdnf \
+  --build-arg PYCMD=/usr/bin/python3.12 \
+  -t eigenstate-openshift-app-demo-ee:latest
 ```
 
 For disconnected or mirrored builds, override
 `OPENSHIFT_CLIENT_TARBALL_URL` with a reachable OpenShift client tarball.
+The included EE definition uses the supported AAP minimal RHEL 9 execution
+environment base. Build hosts must provide RHEL 9 package content that includes
+`ipa-client`, `python3-ipaclient`, and `python3-ipalib`; the stock UBI repos
+visible inside the base image only provide the generic Kerberos client tools.
+Use a subscribed RHEL build host, mounted entitlements, or a mirrored RHEL 9
+content source when building the image. Keep `PYCMD=/usr/bin/python3.12` so
+ansible-builder uses the AAP Python runtime after RHEL packages install
+`/usr/bin/python3`.
+
+In the lab, build on an entitled host and push the image to the OpenShift
+integrated registry in the `aap` namespace. AAP pulls the image by default from:
+
+```text
+image-registry.openshift-image-registry.svc:5000/aap/eigenstate-openshift-app-demo-ee:latest
+```
 
 Then run the controller setup from a shell that can read the OpenShift
 kubeconfig and IPA CA certificate:

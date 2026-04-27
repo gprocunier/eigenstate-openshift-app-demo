@@ -11,6 +11,12 @@
     demo_kubeconfig_path: "{{ demo_runtime_dir }}/kubeconfig"
     demo_krb5_config_path: "{{ demo_runtime_dir }}/krb5.conf"
     demo_ipa_ca_cert_path: "{{ demo_runtime_dir }}/ipa-ca.crt"
+    demo_ipa_system_conf_path: /etc/ipa/default.conf
+    demo_ipa_system_ca_path: /etc/ipa/ca.crt
+    demo_ipa_realm: "{{ lookup('env', 'REALM') | default('WORKSHOP.LAN', true) }}"
+    demo_ipa_domain: "{{ demo_ipa_realm | lower }}"
+    demo_ipa_basedn: "dc={{ demo_ipa_domain.split('.') | join(',dc=') }}"
+    demo_ipa_server: "{{ lookup('env', 'IPA_SERVER') | default('idm-01.workshop.lan', true) }}"
     allow_runtime_collection_install: "{{ lookup('env', 'ALLOW_RUNTIME_COLLECTION_INSTALL') | default('false', true) | bool }}"
     demo_step_map:
       deploy: playbooks/10-deploy-podinfo.yml
@@ -57,6 +63,28 @@
         dest: "{{ demo_ipa_ca_cert_path }}"
         content: "{{ lookup('env', 'DEMO_IPA_CA_CERT_B64') | b64decode }}"
         mode: "0600"
+      no_log: true
+
+    - name: Configure IPA client files expected by FreeIPA modules
+      ansible.builtin.copy:
+        dest: "{{ item.dest }}"
+        content: "{{ item.content }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - dest: "{{ demo_ipa_system_conf_path }}"
+          mode: "0644"
+          content: |
+            [global]
+            basedn = {{ demo_ipa_basedn }}
+            realm = {{ demo_ipa_realm }}
+            domain = {{ demo_ipa_domain }}
+            server = {{ demo_ipa_server }}
+            host = aap-ee.workshop.lan
+            xmlrpc_uri = https://{{ demo_ipa_server }}/ipa/xml
+            enable_ra = True
+        - dest: "{{ demo_ipa_system_ca_path }}"
+          mode: "0644"
+          content: "{{ lookup('env', 'DEMO_IPA_CA_CERT_B64') | b64decode }}"
       no_log: true
 
     - name: Run selected demo step locally in the EE
