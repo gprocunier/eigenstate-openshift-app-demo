@@ -4,6 +4,10 @@ set -euo pipefail
 AAP_URL="${AAP_URL:-https://aap.apps.ocp.workshop.lan}"
 AAP_USERNAME="${AAP_USERNAME:-admin}"
 WORKFLOW_NAME="${WORKFLOW_NAME:-eigenstate podinfo governed onboarding}"
+SUPPORT_TICKET="${SUPPORT_TICKET:-DEMO-1}"
+SUPPORT_REQUESTER="${SUPPORT_REQUESTER:-demo-operator}"
+SUPPORT_REASON="${SUPPORT_REASON:-Validate temporary support access for the podinfo route.}"
+LEASE_DURATION="${LEASE_DURATION:-00:10}"
 
 if [[ -z "${AAP_PASSWORD:-}" ]]; then
   echo "AAP_PASSWORD is required" >&2
@@ -50,7 +54,20 @@ if [[ -z "${workflow_id}" ]]; then
   exit 66
 fi
 
-launch="$(api POST "/workflow_job_templates/${workflow_id}/launch/" '{}')"
+launch_payload="$(jq -n \
+  --arg support_ticket "${SUPPORT_TICKET}" \
+  --arg support_requester "${SUPPORT_REQUESTER}" \
+  --arg support_reason "${SUPPORT_REASON}" \
+  --arg lease_duration "${LEASE_DURATION}" \
+  '{
+    extra_vars: {
+      support_ticket: $support_ticket,
+      support_requester: $support_requester,
+      support_reason: $support_reason,
+      lease_duration: $lease_duration
+    }
+  }')"
+launch="$(api POST "/workflow_job_templates/${workflow_id}/launch/" "${launch_payload}")"
 workflow_job_id="$(jq -r '.workflow_job // .id // empty' <<<"${launch}")"
 if [[ -z "${workflow_job_id}" ]]; then
   echo "unable to determine launched workflow job id" >&2
