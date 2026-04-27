@@ -77,6 +77,7 @@ Defaults:
 - controller URL: `https://aap.apps.ocp.workshop.lan`
 - Git repository: `https://github.com/gprocunier/eigenstate-openshift-app-demo.git`
 - execution environment image: `image-registry.openshift-image-registry.svc:5000/aap/eigenstate-openshift-app-demo-ee:latest`
+- execution environment pull policy: `always`
 - workflow: `eigenstate podinfo governed onboarding`
 
 The setup script creates:
