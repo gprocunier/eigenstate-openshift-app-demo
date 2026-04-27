@@ -22,20 +22,22 @@
       changed_when: false
 
     - name: Validate /version endpoint over HTTPS
-      ansible.builtin.command:
-        argv:
-          - curl
-          - -skf
-          - "https://{{ route_fqdn }}/version"
+      ansible.builtin.uri:
+        url: "https://{{ route_fqdn }}/version"
+        method: GET
+        return_content: true
+        validate_certs: false
+        status_code: 200
       register: version_response
       changed_when: false
 
     - name: Validate /metrics endpoint over HTTPS
-      ansible.builtin.shell: |
-        set -euo pipefail
-        curl -skf "https://{{ route_fqdn }}/metrics" | sed -n '1,8p'
-      args:
-        executable: /bin/bash
+      ansible.builtin.uri:
+        url: "https://{{ route_fqdn }}/metrics"
+        method: GET
+        return_content: true
+        validate_certs: false
+        status_code: 200
       register: metrics_response
       changed_when: false
 
@@ -57,6 +59,6 @@
       ansible.builtin.debug:
         msg:
           - "{{ route_state.stdout }}"
-          - "version: {{ version_response.stdout }}"
-          - "metrics sample: {{ metrics_response.stdout_lines }}"
+          - "version: {{ version_response.content }}"
+          - "metrics sample: {{ (metrics_response.content.splitlines() | list)[:8] }}"
           - "vault: {{ vault_name }} retrieved; payload hidden"

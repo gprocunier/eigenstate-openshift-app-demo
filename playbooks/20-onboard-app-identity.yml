@@ -16,14 +16,10 @@
         mode: "0700"
 
     - name: Generate route private key
-      ansible.builtin.command:
-        argv:
-          - openssl
-          - genrsa
-          - -out
-          - "{{ private_key_path }}"
-          - "2048"
-        creates: "{{ private_key_path }}"
+      community.crypto.openssl_privatekey:
+        path: "{{ private_key_path }}"
+        size: 2048
+        mode: "0600"
       no_log: true
 
     - name: Lock down route private key permissions
@@ -32,20 +28,12 @@
         mode: "0600"
 
     - name: Generate route CSR
-      ansible.builtin.command:
-        argv:
-          - openssl
-          - req
-          - -new
-          - -key
-          - "{{ private_key_path }}"
-          - -out
-          - "{{ csr_path }}"
-          - -subj
-          - "/CN={{ route_fqdn }}"
-          - -addext
-          - "subjectAltName=DNS:{{ route_fqdn }}"
-        creates: "{{ csr_path }}"
+      community.crypto.openssl_csr:
+        path: "{{ csr_path }}"
+        privatekey_path: "{{ private_key_path }}"
+        common_name: "{{ route_fqdn }}"
+        subject_alt_name:
+          - "DNS:{{ route_fqdn }}"
 
     - name: Request IdM-signed route certificate
       ansible.builtin.set_fact:

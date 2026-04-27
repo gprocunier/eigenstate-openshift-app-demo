@@ -22,24 +22,17 @@
       no_log: true
 
     - name: Destroy stale support ticket cache
-      ansible.builtin.command:
-        argv:
-          - kdestroy
-      environment:
-        KRB5CCNAME: "FILE:{{ lease_ccache }}"
+      community.general.krb_ticket:
+        state: absent
+        cache_name: "FILE:{{ lease_ccache }}"
       failed_when: false
       changed_when: false
 
     - name: Get fresh Kerberos ticket for leased support user
-      ansible.builtin.shell: |
-        set -euo pipefail
-        printf '%s\n' "$SUPPORT_PASSWORD" | kinit "$LEASE_PRINCIPAL"
-      args:
-        executable: /bin/bash
-      environment:
-        KRB5CCNAME: "FILE:{{ lease_ccache }}"
-        SUPPORT_PASSWORD: "{{ support_password }}"
-        LEASE_PRINCIPAL: "{{ lease_user }}@{{ realm }}"
+      community.general.krb_ticket:
+        principal: "{{ lease_user }}@{{ realm }}"
+        password: "{{ support_password }}"
+        cache_name: "FILE:{{ lease_ccache }}"
       no_log: true
       changed_when: true
 
@@ -63,4 +56,3 @@
     - name: Show leased access proof
       ansible.builtin.debug:
         msg: "{{ leased_ssh.stdout_lines }}"
-

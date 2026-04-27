@@ -22,11 +22,9 @@
         verify: "{{ ipa_verify }}"
 
     - name: Destroy support ticket cache
-      ansible.builtin.command:
-        argv:
-          - kdestroy
-      environment:
-        KRB5CCNAME: "FILE:{{ lease_ccache }}"
+      community.general.krb_ticket:
+        state: absent
+        cache_name: "FILE:{{ lease_ccache }}"
       failed_when: false
       changed_when: false
 
@@ -43,19 +41,20 @@
       no_log: true
 
     - name: Prove fresh support kinit now fails when password is available
-      ansible.builtin.shell: |
-        set -euo pipefail
-        printf '%s\n' "$SUPPORT_PASSWORD" | kinit "$LEASE_PRINCIPAL"
-      args:
-        executable: /bin/bash
-      environment:
-        KRB5CCNAME: "FILE:{{ lease_ccache }}"
-        SUPPORT_PASSWORD: "{{ support_password }}"
-        LEASE_PRINCIPAL: "{{ lease_user }}@{{ realm }}"
+      community.general.krb_ticket:
+        principal: "{{ lease_user }}@{{ realm }}"
+        password: "{{ support_password }}"
+        cache_name: "FILE:{{ lease_ccache }}"
       register: expired_kinit
-      failed_when: expired_kinit.rc == 0
-      changed_when: false
+      failed_when: false
       no_log: true
+
+    - name: Assert fresh support kinit failed after expiry
+      ansible.builtin.assert:
+        that:
+          - not expired_kinit.changed | bool
+          - expired_kinit.msg is defined
+        fail_msg: "Fresh kinit for {{ lease_user }} still succeeded after IdM expiry."
 
     - name: Show expiry proof
       ansible.builtin.debug:
