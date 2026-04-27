@@ -11,6 +11,13 @@ environment. The EE handles OpenShift and IdM work directly.
 
 Build and publish the EE image before controller setup:
 
+The upstream `ee-minimal-rhel9` base image ships `microdnf` instead of `dnf`.
+When `ansible-builder` generates a build context that calls `dnf` in its
+assemble scripts, the build fails on a clean host without cached layers.
+Pass `--build-arg PKGMGR=/usr/bin/microdnf` to work around this, or use
+a standalone Containerfile that calls `microdnf` directly for system
+package installation.
+
 ```bash
 ansible-builder build \
   -f execution-environment/execution-environment.yml \

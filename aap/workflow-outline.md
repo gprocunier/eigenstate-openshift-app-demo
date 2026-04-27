@@ -4,6 +4,12 @@ Target route: `https://aap.apps.ocp.workshop.lan`
 
 Expected admin-capable IdM user: `sysop`
 
+The `sysop` IdM user is a member of `access-openshift-admin` and
+`access-linux-admin`. In AAP, `sysop` has `is_superuser` rights and can
+launch, edit, and approve all demo workflow objects. Authentication works
+through Keycloak SSO and through a local AAP password set to the lab
+default.
+
 The implemented workflow is named `eigenstate podinfo governed onboarding`.
 It runs one job template per demo step. Each job template uses the custom demo
 execution environment and runs `aap/playbooks/run-ee-demo-step.yml` locally in
