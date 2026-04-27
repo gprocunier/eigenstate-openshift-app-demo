@@ -1,0 +1,7 @@
+ipalib==4.12.2
+ipaclient==4.12.2
+pyasn1==0.4.8
+pyasn1-modules==0.2.8
+dnspython==2.6.1
+netaddr==0.10.1
+qrcode==6.1

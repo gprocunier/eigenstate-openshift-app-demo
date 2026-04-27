@@ -93,7 +93,9 @@ visible inside the base image only provide the generic Kerberos client tools.
 Use a subscribed RHEL build host, mounted entitlements, or a mirrored RHEL 9
 content source when building the image. Keep `PYCMD=/usr/bin/python3.12` so
 ansible-builder uses the AAP Python runtime after RHEL packages install
-`/usr/bin/python3`.
+`/usr/bin/python3`. The EE also installs the matching upstream FreeIPA 4.12.2
+Python packages into the AAP Python 3.12 runtime because RHEL 9 does not ship
+`python3.12-ipalib` or `python3.12-ipaclient` RPMs.
 
 In the lab, build on an entitled host and push the image to the OpenShift
 integrated registry in the `aap` namespace. AAP pulls the image by default from:
