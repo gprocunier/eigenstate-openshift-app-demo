@@ -112,6 +112,9 @@ upsert_named() {
 associate_id() {
   local path="$1"
   local id="$2"
+  if api GET "${path}" | jq -e --argjson id "${id}" '.results[]? | select(.id == $id)' >/dev/null; then
+    return 0
+  fi
   api POST "${path}" "$(jq -n --argjson id "${id}" '{id: $id}')" >/dev/null
 }
 
