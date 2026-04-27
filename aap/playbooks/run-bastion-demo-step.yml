@@ -59,6 +59,7 @@
         LAB_DEFAULT_PASSWORD: "{{ lookup('env', 'LAB_DEFAULT_PASSWORD') }}"
         IPA_ADMIN_PASSWORD: "{{ lookup('env', 'IPA_ADMIN_PASSWORD') | default(lookup('env', 'LAB_DEFAULT_PASSWORD'), true) }}"
         SUPPORT_USER_PASSWORD: "{{ lookup('env', 'SUPPORT_USER_PASSWORD') | default(lookup('env', 'LAB_DEFAULT_PASSWORD'), true) }}"
+        LEASE_DURATION: "{{ lease_duration | default('00:10', true) }}"
       register: demo_step_run
       changed_when: demo_step_run.rc == 0
 

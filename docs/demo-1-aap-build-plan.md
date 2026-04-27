@@ -25,7 +25,9 @@ vault, HBAC, sudo, and leased support access, then expires the support lease.
 4. Run `aap/setup-aap-demo.sh` with controller and lab credentials supplied by
    environment.
 5. Launch `run-demo-aap.sh`.
-6. Validate the route, vault evidence, support access lease, and lease expiry.
+6. Approve the native AAP support lease gate.
+7. If enabled, approve the GitHub issue gate with a `/approve` comment.
+8. Validate the route, vault evidence, support access lease, and lease expiry.
 
 ## Notes
 
@@ -33,3 +35,7 @@ vault, HBAC, sudo, and leased support access, then expires the support lease.
 - The setup script creates a demo-specific SSH key for AAP-to-bastion access.
 - Secrets are supplied through AAP credentials and environment variables; they
   are not stored in this repository.
+- The workflow survey captures ticket, requester, reason, and lease duration.
+- The native AAP approval node demonstrates controller-governed approval.
+- The optional GitHub issue gate demonstrates third-party approval before the
+  support lease opens.

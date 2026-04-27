@@ -22,11 +22,15 @@ bastion through `aap/playbooks/run-bastion-demo-step.yml`.
    runs `playbooks/30-validate-route.yml`.
 6. `access_preflight`
    runs `playbooks/35-preflight-access-policy.yml`.
-7. `open_lease`
+7. `approve_support_lease`
+   pauses for native AAP workflow approval.
+8. `github_issue_gate`
+   optionally creates and waits on a GitHub issue approval.
+9. `open_lease`
    runs `playbooks/40-open-support-lease.yml`.
-8. `validate_leased_access`
+10. `validate_leased_access`
    runs `playbooks/45-validate-leased-access.yml`.
-9. `expire_lease`
+11. `expire_lease`
    runs `playbooks/50-expire-support-lease.yml`.
 
 ## Credential Model
@@ -34,6 +38,8 @@ bastion through `aap/playbooks/run-bastion-demo-step.yml`.
 - Machine credential: AAP-to-bastion SSH as `cloud-user`.
 - Custom credential type: injects the lab default password as
   `LAB_DEFAULT_PASSWORD`, `IPA_ADMIN_PASSWORD`, and `SUPPORT_USER_PASSWORD`.
+- Optional GitHub issue gate credential type: injects `GITHUB_TOKEN`,
+  `GITHUB_REPOSITORY`, and `GITHUB_GATE_TIMEOUT`.
 - OpenShift access: inherited from the bastion runtime through
   `$HOME/etc/kubeconfig`.
 - IdM access: supplied to the bastion runtime through the injected environment.
@@ -41,4 +47,5 @@ bastion through `aap/playbooks/run-bastion-demo-step.yml`.
 ## Setup Script
 
 `aap/setup-aap-demo.sh` creates the credential type, credentials, inventory,
-SCM project, job templates, and workflow through the AAP controller API.
+SCM project, survey, job templates, native approval node, optional GitHub issue
+gate, and workflow graph through the AAP controller API.

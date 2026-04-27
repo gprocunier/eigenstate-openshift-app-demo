@@ -82,6 +82,13 @@ export LAB_DEFAULT_PASSWORD='<lab default password>'
 
 See `aap/README.md` for the controller objects created by setup.
 
+The AAP path demonstrates three approval patterns before opening support
+access:
+
+- a workflow survey captures ticket, requester, reason, and lease duration
+- a native AAP approval node pauses the workflow after access preflight
+- an optional GitHub issue gate waits for a `/approve` issue comment
+
 ## Cleanup
 
 ```bash

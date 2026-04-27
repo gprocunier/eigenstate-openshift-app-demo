@@ -11,6 +11,12 @@ WORKFLOW_NAME="${WORKFLOW_NAME:-eigenstate podinfo governed onboarding}"
 MACHINE_CREDENTIAL_NAME="${MACHINE_CREDENTIAL_NAME:-eigenstate demo bastion ssh}"
 LAB_CREDENTIAL_TYPE_NAME="${LAB_CREDENTIAL_TYPE_NAME:-Eigenstate Demo Lab Password}"
 LAB_CREDENTIAL_NAME="${LAB_CREDENTIAL_NAME:-eigenstate demo lab password}"
+GITHUB_CREDENTIAL_TYPE_NAME="${GITHUB_CREDENTIAL_TYPE_NAME:-Eigenstate GitHub Issue Gate}"
+GITHUB_CREDENTIAL_NAME="${GITHUB_CREDENTIAL_NAME:-eigenstate demo GitHub issue gate}"
+GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-gprocunier/eigenstate-openshift-app-demo}"
+GITHUB_GATE_TIMEOUT="${GITHUB_GATE_TIMEOUT:-1800}"
+ENABLE_GITHUB_ISSUE_GATE="${ENABLE_GITHUB_ISSUE_GATE:-auto}"
+SUPPORT_APPROVAL_TIMEOUT="${SUPPORT_APPROVAL_TIMEOUT:-3600}"
 BASTION_HOST_NAME="${BASTION_HOST_NAME:-bastion-01}"
 BASTION_HOST="${BASTION_HOST:-172.16.0.30}"
 BASTION_USER="${BASTION_USER:-cloud-user}"
@@ -23,6 +29,19 @@ fi
 
 if [[ -z "${LAB_DEFAULT_PASSWORD:-}" ]]; then
   echo "LAB_DEFAULT_PASSWORD is required" >&2
+  exit 64
+fi
+
+if [[ "${ENABLE_GITHUB_ISSUE_GATE}" == "auto" ]]; then
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    ENABLE_GITHUB_ISSUE_GATE=true
+  else
+    ENABLE_GITHUB_ISSUE_GATE=false
+  fi
+fi
+
+if [[ "${ENABLE_GITHUB_ISSUE_GATE}" == "true" && -z "${GITHUB_TOKEN:-}" ]]; then
+  echo "GITHUB_TOKEN is required when ENABLE_GITHUB_ISSUE_GATE=true" >&2
   exit 64
 fi
 
@@ -195,6 +214,51 @@ lab_credential_payload="$(jq -n \
   }')"
 lab_credential_id="$(upsert_named credentials "${LAB_CREDENTIAL_NAME}" "${lab_credential_payload}")"
 
+github_credential_id=""
+if [[ "${ENABLE_GITHUB_ISSUE_GATE}" == "true" ]]; then
+  github_type_payload="$(jq -n \
+    --arg name "${GITHUB_CREDENTIAL_TYPE_NAME}" \
+    '{
+      name: $name,
+      kind: "cloud",
+      inputs: {
+        fields: [
+          {id: "github_token", label: "GitHub token", type: "string", secret: true},
+          {id: "github_repository", label: "GitHub repository", type: "string"},
+          {id: "github_gate_timeout", label: "Gate timeout seconds", type: "string"}
+        ],
+        required: ["github_token", "github_repository"]
+      },
+      injectors: {
+        env: {
+          GITHUB_TOKEN: "{{ github_token }}",
+          GITHUB_REPOSITORY: "{{ github_repository }}",
+          GITHUB_GATE_TIMEOUT: "{{ github_gate_timeout }}"
+        }
+      }
+    }')"
+  github_type_id="$(upsert_named credential_types "${GITHUB_CREDENTIAL_TYPE_NAME}" "${github_type_payload}")"
+
+  github_credential_payload="$(jq -n \
+    --arg name "${GITHUB_CREDENTIAL_NAME}" \
+    --argjson organization "${org_id}" \
+    --argjson credential_type "${github_type_id}" \
+    --arg github_token "${GITHUB_TOKEN}" \
+    --arg github_repository "${GITHUB_REPOSITORY}" \
+    --arg github_gate_timeout "${GITHUB_GATE_TIMEOUT}" \
+    '{
+      name: $name,
+      organization: $organization,
+      credential_type: $credential_type,
+      inputs: {
+        github_token: $github_token,
+        github_repository: $github_repository,
+        github_gate_timeout: $github_gate_timeout
+      }
+    }')"
+  github_credential_id="$(upsert_named credentials "${GITHUB_CREDENTIAL_NAME}" "${github_credential_payload}")"
+fi
+
 inventory_payload="$(jq -n \
   --arg name "${INVENTORY_NAME}" \
   --argjson organization "${org_id}" \
@@ -274,30 +338,169 @@ for step in "${ordered_steps[@]}"; do
       name: $name,
       job_type: "run",
       inventory: $inventory,
-      project: $project,
-      playbook: "aap/playbooks/run-bastion-demo-step.yml",
-      extra_vars: ({demo_step: $demo_step} | tostring),
-      verbosity: 1
-    }')"
+	      project: $project,
+	      playbook: "aap/playbooks/run-bastion-demo-step.yml",
+	      extra_vars: ({demo_step: $demo_step} | tostring),
+	      ask_variables_on_launch: true,
+	      verbosity: 1
+	    }')"
   jt_id="$(upsert_named job_templates "${jt_name}" "${jt_payload}")"
   associate_id "/job_templates/${jt_id}/credentials/" "${machine_credential_id}"
   associate_id "/job_templates/${jt_id}/credentials/" "${lab_credential_id}"
   job_template_ids["${step}"]="${jt_id}"
 done
 
+github_gate_job_template_id=""
+if [[ "${ENABLE_GITHUB_ISSUE_GATE}" == "true" ]]; then
+  github_gate_payload="$(jq -n \
+    --arg name "eigenstate podinfo GitHub support approval gate" \
+    --argjson inventory "${inventory_id}" \
+    --argjson project "${project_id}" \
+    '{
+      name: $name,
+      job_type: "run",
+      inventory: $inventory,
+      project: $project,
+      playbook: "aap/playbooks/github-issue-gate.yml",
+      ask_variables_on_launch: true,
+      verbosity: 1
+    }')"
+  github_gate_job_template_id="$(upsert_named job_templates "eigenstate podinfo GitHub support approval gate" "${github_gate_payload}")"
+  associate_id "/job_templates/${github_gate_job_template_id}/credentials/" "${machine_credential_id}"
+  associate_id "/job_templates/${github_gate_job_template_id}/credentials/" "${github_credential_id}"
+fi
+
 workflow_payload="$(jq -n \
   --arg name "${WORKFLOW_NAME}" \
   --argjson organization "${org_id}" \
-  '{name: $name, organization: $organization}')"
+  '{
+    name: $name,
+    organization: $organization,
+    survey_enabled: true,
+    ask_variables_on_launch: true
+  }')"
 workflow_id="$(upsert_named workflow_job_templates "${WORKFLOW_NAME}" "${workflow_payload}")"
+
+survey_payload="$(jq -n \
+  '{
+    name: "Support lease request",
+    description: "Context for the AAP and GitHub approval gates before opening support access.",
+    spec: [
+      {
+        question_name: "Support ticket",
+        question_description: "Change, incident, or demo ticket reference.",
+        required: true,
+        type: "text",
+        variable: "support_ticket",
+        default: "DEMO-1",
+        min: 0,
+        max: 128
+      },
+      {
+        question_name: "Support requester",
+        question_description: "Person or team requesting the temporary access lease.",
+        required: true,
+        type: "text",
+        variable: "support_requester",
+        default: "demo-operator",
+        min: 0,
+        max: 128
+      },
+      {
+        question_name: "Support reason",
+        question_description: "Business or operational reason for opening the support lease.",
+        required: true,
+        type: "textarea",
+        variable: "support_reason",
+        default: "Validate temporary support access for the podinfo route.",
+        min: 0,
+        max: 2048
+      },
+      {
+        question_name: "Lease duration",
+        question_description: "IdM principal expiration offset passed to the demo runtime.",
+        required: true,
+        type: "text",
+        variable: "lease_duration",
+        default: "00:10",
+        min: 0,
+        max: 32
+      }
+    ]
+  }')"
+api POST "/workflow_job_templates/${workflow_id}/survey_spec/" "${survey_payload}" >/dev/null
 
 existing_nodes="$(api GET "/workflow_job_templates/${workflow_id}/workflow_nodes/" | jq -r '.results[].id')"
 for node_id in ${existing_nodes}; do
   api DELETE "/workflow_job_template_nodes/${node_id}/" >/dev/null
 done
 
+workflow_steps_before_approval=(
+  deploy
+  bootstrap
+  identity_preflight
+  onboard
+  validate_route
+  access_preflight
+)
+
+workflow_steps_after_approval=(
+  open_lease
+  validate_leased_access
+  expire_lease
+)
+
 previous_node_id=""
-for step in "${ordered_steps[@]}"; do
+for step in "${workflow_steps_before_approval[@]}"; do
+  node_payload="$(jq -n \
+    --arg identifier "${step}" \
+    --argjson workflow_job_template "${workflow_id}" \
+    --argjson unified_job_template "${job_template_ids[${step}]}" \
+    '{
+      identifier: $identifier,
+      workflow_job_template: $workflow_job_template,
+      unified_job_template: $unified_job_template
+    }')"
+  node_id="$(api POST "/workflow_job_templates/${workflow_id}/workflow_nodes/" "${node_payload}" | jq -r '.id')"
+  if [[ -n "${previous_node_id}" ]]; then
+    associate_id "/workflow_job_template_nodes/${previous_node_id}/success_nodes/" "${node_id}"
+  fi
+  previous_node_id="${node_id}"
+done
+
+approval_payload="$(jq -n \
+  --argjson workflow_job_template "${workflow_id}" \
+  --argjson timeout "${SUPPORT_APPROVAL_TIMEOUT}" \
+  '{
+    identifier: "approve_support_lease",
+    workflow_job_template: $workflow_job_template,
+    approval_node: {
+      name: "Approve support lease",
+      description: "Approve opening the temporary podinfo support access lease.",
+      timeout: $timeout
+    }
+  }')"
+approval_node_id="$(api POST "/workflow_job_templates/${workflow_id}/workflow_nodes/" "${approval_payload}" | jq -r '.id')"
+if [[ -n "${previous_node_id}" ]]; then
+  associate_id "/workflow_job_template_nodes/${previous_node_id}/success_nodes/" "${approval_node_id}"
+fi
+previous_node_id="${approval_node_id}"
+
+if [[ "${ENABLE_GITHUB_ISSUE_GATE}" == "true" ]]; then
+  github_gate_node_payload="$(jq -n \
+    --argjson workflow_job_template "${workflow_id}" \
+    --argjson unified_job_template "${github_gate_job_template_id}" \
+    '{
+      identifier: "github_issue_gate",
+      workflow_job_template: $workflow_job_template,
+      unified_job_template: $unified_job_template
+    }')"
+  github_gate_node_id="$(api POST "/workflow_job_templates/${workflow_id}/workflow_nodes/" "${github_gate_node_payload}" | jq -r '.id')"
+  associate_id "/workflow_job_template_nodes/${previous_node_id}/success_nodes/" "${github_gate_node_id}"
+  previous_node_id="${github_gate_node_id}"
+fi
+
+for step in "${workflow_steps_after_approval[@]}"; do
   node_payload="$(jq -n \
     --arg identifier "${step}" \
     --argjson workflow_job_template "${workflow_id}" \
@@ -318,3 +521,5 @@ echo "AAP demo objects are ready."
 echo "Workflow: ${WORKFLOW_NAME}"
 echo "Project: ${PROJECT_NAME}"
 echo "Inventory: ${INVENTORY_NAME}"
+echo "Native support approval: enabled"
+echo "GitHub issue gate: ${ENABLE_GITHUB_ISSUE_GATE}"

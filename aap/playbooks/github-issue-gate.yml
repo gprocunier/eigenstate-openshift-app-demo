@@ -1,0 +1,88 @@
+---
+- name: Wait for GitHub issue approval before opening support lease
+  hosts: bastion
+  gather_facts: false
+
+  vars:
+    github_repository: "{{ lookup('env', 'GITHUB_REPOSITORY') | default('gprocunier/eigenstate-openshift-app-demo', true) }}"
+    github_gate_timeout: "{{ github_gate_timeout_seconds | default(lookup('env', 'GITHUB_GATE_TIMEOUT') | default(1800, true), true) | int }}"
+    github_gate_poll_seconds: "{{ github_gate_poll_seconds_override | default(15) | int }}"
+    github_approval_command: "{{ github_approval_command_override | default('/approve') }}"
+    github_denial_command: "{{ github_denial_command_override | default('/deny') }}"
+    support_ticket_value: "{{ support_ticket | default('DEMO-1', true) }}"
+    support_reason_value: "{{ support_reason | default('Open temporary podinfo support lease', true) }}"
+    support_requester_value: "{{ support_requester | default('AAP workflow launch', true) }}"
+    lease_duration_value: "{{ lease_duration | default('00:10', true) }}"
+    route_fqdn_value: "{{ route_fqdn | default('podinfo.apps.ocp.workshop.lan', true) }}"
+
+  tasks:
+    - name: Require GitHub token
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'GITHUB_TOKEN') | length > 0
+        fail_msg: "GITHUB_TOKEN is required for the external GitHub approval gate."
+      no_log: true
+
+    - name: Open GitHub approval issue
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ github_repository }}/issues"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ lookup('env', 'GITHUB_TOKEN') }}"
+          Accept: application/vnd.github+json
+          X-GitHub-Api-Version: "2022-11-28"
+        body_format: json
+        body:
+          title: "Approve support lease: {{ support_ticket_value }}"
+          body: |
+            AAP is requesting approval to open a temporary support lease.
+
+            Ticket: {{ support_ticket_value }}
+            Requester: {{ support_requester_value }}
+            Route: {{ route_fqdn_value }}
+            Lease duration: {{ lease_duration_value }}
+
+            Reason:
+            {{ support_reason_value }}
+
+            Approve by adding a comment containing:
+
+            `{{ github_approval_command }}`
+
+            Deny by adding a comment containing:
+
+            `{{ github_denial_command }}`
+        status_code: 201
+      register: github_gate_issue
+      no_log: true
+
+    - name: Show GitHub approval issue
+      ansible.builtin.debug:
+        msg: "Waiting for GitHub approval issue {{ github_gate_issue.json.html_url }}"
+
+    - name: Poll GitHub approval issue comments
+      ansible.builtin.uri:
+        url: "{{ github_gate_issue.json.comments_url }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ lookup('env', 'GITHUB_TOKEN') }}"
+          Accept: application/vnd.github+json
+          X-GitHub-Api-Version: "2022-11-28"
+        status_code: 200
+      register: github_gate_comments
+      until: >-
+        (github_gate_comments.json | selectattr('body', 'search', '(?im)^\\s*' ~ (github_approval_command | regex_escape) ~ '\\b') | list | length > 0)
+        or
+        (github_gate_comments.json | selectattr('body', 'search', '(?im)^\\s*' ~ (github_denial_command | regex_escape) ~ '\\b') | list | length > 0)
+      retries: "{{ (github_gate_timeout / github_gate_poll_seconds) | int }}"
+      delay: "{{ github_gate_poll_seconds }}"
+      no_log: true
+
+    - name: Fail when GitHub approval issue was denied
+      ansible.builtin.fail:
+        msg: "GitHub approval issue was denied: {{ github_gate_issue.json.html_url }}"
+      when: github_gate_comments.json | selectattr('body', 'search', '(?im)^\\s*' ~ (github_denial_command | regex_escape) ~ '\\b') | list | length > 0
+
+    - name: Show GitHub gate approval
+      ansible.builtin.debug:
+        msg: "GitHub approval received for {{ github_gate_issue.json.html_url }}"
