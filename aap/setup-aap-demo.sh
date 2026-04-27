@@ -8,19 +8,24 @@ ORG_NAME="${ORG_NAME:-Default}"
 INVENTORY_NAME="${INVENTORY_NAME:-eigenstate podinfo demo}"
 PROJECT_NAME="${PROJECT_NAME:-eigenstate podinfo demo project}"
 WORKFLOW_NAME="${WORKFLOW_NAME:-eigenstate podinfo governed onboarding}"
-MACHINE_CREDENTIAL_NAME="${MACHINE_CREDENTIAL_NAME:-eigenstate demo bastion ssh}"
+EE_NAME="${EE_NAME:-eigenstate podinfo demo EE}"
+EE_IMAGE="${EE_IMAGE:-ghcr.io/gprocunier/eigenstate-openshift-app-demo-ee:latest}"
+EE_PULL_POLICY="${EE_PULL_POLICY:-missing}"
 LAB_CREDENTIAL_TYPE_NAME="${LAB_CREDENTIAL_TYPE_NAME:-Eigenstate Demo Lab Password}"
 LAB_CREDENTIAL_NAME="${LAB_CREDENTIAL_NAME:-eigenstate demo lab password}"
+RUNTIME_CREDENTIAL_TYPE_NAME="${RUNTIME_CREDENTIAL_TYPE_NAME:-Eigenstate Demo EE Runtime}"
+RUNTIME_CREDENTIAL_NAME="${RUNTIME_CREDENTIAL_NAME:-eigenstate demo EE runtime}"
 GITHUB_CREDENTIAL_TYPE_NAME="${GITHUB_CREDENTIAL_TYPE_NAME:-Eigenstate GitHub Issue Gate}"
 GITHUB_CREDENTIAL_NAME="${GITHUB_CREDENTIAL_NAME:-eigenstate demo GitHub issue gate}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-gprocunier/eigenstate-openshift-app-demo}"
 GITHUB_GATE_TIMEOUT="${GITHUB_GATE_TIMEOUT:-1800}"
 ENABLE_GITHUB_ISSUE_GATE="${ENABLE_GITHUB_ISSUE_GATE:-auto}"
 SUPPORT_APPROVAL_TIMEOUT="${SUPPORT_APPROVAL_TIMEOUT:-3600}"
-BASTION_HOST_NAME="${BASTION_HOST_NAME:-bastion-01}"
-BASTION_HOST="${BASTION_HOST:-172.16.0.30}"
-BASTION_USER="${BASTION_USER:-cloud-user}"
-BASTION_KEY_PATH="${BASTION_KEY_PATH:-/tmp/demo/aap-demo-bastion-ed25519}"
+IPA_SERVER="${IPA_SERVER:-idm-01.workshop.lan}"
+REALM="${REALM:-WORKSHOP.LAN}"
+KUBECONFIG_PATH="${KUBECONFIG_PATH:-${KUBECONFIG:-${HOME}/etc/kubeconfig}}"
+IPA_CA_CERT_PATH="${IPA_CA_CERT_PATH:-${IPA_CERT:-/etc/ipa/ca.crt}}"
+KRB5_CONFIG_PATH="${KRB5_CONFIG_PATH:-/etc/krb5.conf}"
 
 if [[ -z "${AAP_PASSWORD:-}" ]]; then
   echo "AAP_PASSWORD is required" >&2
@@ -52,9 +57,69 @@ require_cmd() {
   }
 }
 
+require_cmd base64
 require_cmd curl
 require_cmd jq
-require_cmd ssh-keygen
+
+b64_file() {
+  if base64 --help 2>/dev/null | grep -q -- '-w'; then
+    base64 -w0 "$1"
+  else
+    base64 "$1" | tr -d '\n'
+  fi
+}
+
+b64_text() {
+  if base64 --help 2>/dev/null | grep -q -- '-w'; then
+    base64 -w0
+  else
+    base64 | tr -d '\n'
+  fi
+}
+
+if [[ -z "${KUBECONFIG_B64:-}" ]]; then
+  if [[ ! -r "${KUBECONFIG_PATH}" ]]; then
+    echo "KUBECONFIG_B64 or a readable KUBECONFIG_PATH is required" >&2
+    echo "Tried: ${KUBECONFIG_PATH}" >&2
+    exit 66
+  fi
+  KUBECONFIG_B64="$(b64_file "${KUBECONFIG_PATH}")"
+fi
+
+if [[ -z "${IPA_CA_CERT_B64:-}" ]]; then
+  if [[ ! -r "${IPA_CA_CERT_PATH}" ]]; then
+    echo "IPA_CA_CERT_B64 or a readable IPA_CA_CERT_PATH is required" >&2
+    echo "Tried: ${IPA_CA_CERT_PATH}" >&2
+    exit 66
+  fi
+  IPA_CA_CERT_B64="$(b64_file "${IPA_CA_CERT_PATH}")"
+fi
+
+if [[ -z "${KRB5_CONFIG_B64:-}" ]]; then
+  if [[ -r "${KRB5_CONFIG_PATH}" ]]; then
+    KRB5_CONFIG_B64="$(b64_file "${KRB5_CONFIG_PATH}")"
+  else
+    KRB5_CONFIG_B64="$(
+      cat <<EOF | b64_text
+[libdefaults]
+ default_realm = ${REALM}
+ dns_lookup_realm = false
+ dns_lookup_kdc = false
+ rdns = false
+
+[realms]
+ ${REALM} = {
+  kdc = ${IPA_SERVER}
+  admin_server = ${IPA_SERVER}
+ }
+
+[domain_realm]
+ .workshop.lan = ${REALM}
+ workshop.lan = ${REALM}
+EOF
+    )"
+  fi
+fi
 
 api() {
   local method="$1"
@@ -137,31 +202,23 @@ wait_unified_job() {
   done
 }
 
-mkdir -p "$(dirname "${BASTION_KEY_PATH}")"
-chmod 700 "$(dirname "${BASTION_KEY_PATH}")"
-if [[ ! -f "${BASTION_KEY_PATH}" ]]; then
-  ssh-keygen -t ed25519 -N '' -C eigenstate-aap-demo -f "${BASTION_KEY_PATH}" >/dev/null
-fi
-chmod 600 "${BASTION_KEY_PATH}"
-
-mkdir -p "${HOME}/.ssh"
-chmod 700 "${HOME}/.ssh"
-touch "${HOME}/.ssh/authorized_keys"
-chmod 600 "${HOME}/.ssh/authorized_keys"
-if ! grep -qxF "$(cat "${BASTION_KEY_PATH}.pub")" "${HOME}/.ssh/authorized_keys"; then
-  cat "${BASTION_KEY_PATH}.pub" >> "${HOME}/.ssh/authorized_keys"
-fi
-
 org_id="$(get_named_id organizations "${ORG_NAME}")"
 if [[ -z "${org_id}" ]]; then
   org_id="$(api POST /organizations/ "$(jq -n --arg name "${ORG_NAME}" '{name: $name}')" | jq -r '.id')"
 fi
 
-machine_type_id="$(get_named_id credential_types Machine)"
-if [[ -z "${machine_type_id}" ]]; then
-  echo "AAP Machine credential type was not found" >&2
-  exit 1
-fi
+ee_payload="$(jq -n \
+  --arg name "${EE_NAME}" \
+  --arg image "${EE_IMAGE}" \
+  --arg pull "${EE_PULL_POLICY}" \
+  --argjson organization "${org_id}" \
+  '{
+    name: $name,
+    image: $image,
+    pull: $pull,
+    organization: $organization
+  }')"
+ee_id="$(upsert_named execution_environments "${EE_NAME}" "${ee_payload}")"
 
 lab_type_payload="$(jq -n \
   --arg name "${LAB_CREDENTIAL_TYPE_NAME}" \
@@ -184,24 +241,6 @@ lab_type_payload="$(jq -n \
   }')"
 lab_type_id="$(upsert_named credential_types "${LAB_CREDENTIAL_TYPE_NAME}" "${lab_type_payload}")"
 
-private_key="$(cat "${BASTION_KEY_PATH}")"
-machine_credential_payload="$(jq -n \
-  --arg name "${MACHINE_CREDENTIAL_NAME}" \
-  --argjson organization "${org_id}" \
-  --argjson credential_type "${machine_type_id}" \
-  --arg username "${BASTION_USER}" \
-  --arg ssh_key_data "${private_key}" \
-  '{
-    name: $name,
-    organization: $organization,
-    credential_type: $credential_type,
-    inputs: {
-      username: $username,
-      ssh_key_data: $ssh_key_data
-    }
-  }')"
-machine_credential_id="$(upsert_named credentials "${MACHINE_CREDENTIAL_NAME}" "${machine_credential_payload}")"
-
 lab_credential_payload="$(jq -n \
   --arg name "${LAB_CREDENTIAL_NAME}" \
   --argjson organization "${org_id}" \
@@ -216,6 +255,56 @@ lab_credential_payload="$(jq -n \
     }
   }')"
 lab_credential_id="$(upsert_named credentials "${LAB_CREDENTIAL_NAME}" "${lab_credential_payload}")"
+
+runtime_type_payload="$(jq -n \
+  --arg name "${RUNTIME_CREDENTIAL_TYPE_NAME}" \
+  '{
+    name: $name,
+    kind: "cloud",
+    inputs: {
+      fields: [
+        {id: "kubeconfig_b64", label: "Kubeconfig base64", type: "string", secret: true, multiline: true},
+        {id: "krb5_config_b64", label: "krb5.conf base64", type: "string", secret: true, multiline: true},
+        {id: "ipa_ca_cert_b64", label: "IPA CA certificate base64", type: "string", secret: true, multiline: true},
+        {id: "ipa_server", label: "IPA server", type: "string"},
+        {id: "realm", label: "Kerberos realm", type: "string"}
+      ],
+      required: ["kubeconfig_b64", "krb5_config_b64", "ipa_ca_cert_b64", "ipa_server", "realm"]
+    },
+    injectors: {
+      env: {
+        DEMO_KUBECONFIG_B64: "{{ kubeconfig_b64 }}",
+        DEMO_KRB5_CONFIG_B64: "{{ krb5_config_b64 }}",
+        DEMO_IPA_CA_CERT_B64: "{{ ipa_ca_cert_b64 }}",
+        IPA_SERVER: "{{ ipa_server }}",
+        REALM: "{{ realm }}"
+      }
+    }
+  }')"
+runtime_type_id="$(upsert_named credential_types "${RUNTIME_CREDENTIAL_TYPE_NAME}" "${runtime_type_payload}")"
+
+runtime_credential_payload="$(jq -n \
+  --arg name "${RUNTIME_CREDENTIAL_NAME}" \
+  --argjson organization "${org_id}" \
+  --argjson credential_type "${runtime_type_id}" \
+  --arg kubeconfig_b64 "${KUBECONFIG_B64}" \
+  --arg krb5_config_b64 "${KRB5_CONFIG_B64}" \
+  --arg ipa_ca_cert_b64 "${IPA_CA_CERT_B64}" \
+  --arg ipa_server "${IPA_SERVER}" \
+  --arg realm "${REALM}" \
+  '{
+    name: $name,
+    organization: $organization,
+    credential_type: $credential_type,
+    inputs: {
+      kubeconfig_b64: $kubeconfig_b64,
+      krb5_config_b64: $krb5_config_b64,
+      ipa_ca_cert_b64: $ipa_ca_cert_b64,
+      ipa_server: $ipa_server,
+      realm: $realm
+    }
+  }')"
+runtime_credential_id="$(upsert_named credentials "${RUNTIME_CREDENTIAL_NAME}" "${runtime_credential_payload}")"
 
 github_credential_id=""
 if [[ "${ENABLE_GITHUB_ISSUE_GATE}" == "true" ]]; then
@@ -269,20 +358,17 @@ inventory_payload="$(jq -n \
 inventory_id="$(upsert_named inventories "${INVENTORY_NAME}" "${inventory_payload}")"
 
 host_payload="$(jq -n \
-  --arg name "${BASTION_HOST_NAME}" \
+  --arg name localhost \
   --argjson inventory "${inventory_id}" \
-  --arg ansible_host "${BASTION_HOST}" \
-  --arg ansible_user "${BASTION_USER}" \
   '{
     name: $name,
     inventory: $inventory,
     variables: ({
-      ansible_host: $ansible_host,
-      ansible_user: $ansible_user,
-      ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+      ansible_connection: "local",
+      ansible_python_interpreter: "{{ ansible_playbook_python }}"
     } | tostring)
   }')"
-upsert_named hosts "${BASTION_HOST_NAME}" "${host_payload}" >/dev/null
+upsert_named hosts localhost "${host_payload}" >/dev/null
 
 project_payload="$(jq -n \
   --arg name "${PROJECT_NAME}" \
@@ -336,20 +422,22 @@ for step in "${ordered_steps[@]}"; do
     --arg name "${jt_name}" \
     --argjson inventory "${inventory_id}" \
     --argjson project "${project_id}" \
+    --argjson execution_environment "${ee_id}" \
     --arg demo_step "${step}" \
     '{
       name: $name,
       job_type: "run",
       inventory: $inventory,
-	      project: $project,
-	      playbook: "aap/playbooks/run-bastion-demo-step.yml",
-	      extra_vars: ({demo_step: $demo_step} | tostring),
-	      ask_variables_on_launch: true,
-	      verbosity: 1
-	    }')"
+      project: $project,
+      execution_environment: $execution_environment,
+      playbook: "aap/playbooks/run-ee-demo-step.yml",
+      extra_vars: ({demo_step: $demo_step} | tostring),
+      ask_variables_on_launch: true,
+      verbosity: 1
+    }')"
   jt_id="$(upsert_named job_templates "${jt_name}" "${jt_payload}")"
-  associate_id "/job_templates/${jt_id}/credentials/" "${machine_credential_id}"
   associate_id "/job_templates/${jt_id}/credentials/" "${lab_credential_id}"
+  associate_id "/job_templates/${jt_id}/credentials/" "${runtime_credential_id}"
   job_template_ids["${step}"]="${jt_id}"
 done
 
@@ -359,17 +447,18 @@ if [[ "${ENABLE_GITHUB_ISSUE_GATE}" == "true" ]]; then
     --arg name "eigenstate podinfo GitHub support approval gate" \
     --argjson inventory "${inventory_id}" \
     --argjson project "${project_id}" \
+    --argjson execution_environment "${ee_id}" \
     '{
       name: $name,
       job_type: "run",
       inventory: $inventory,
       project: $project,
+      execution_environment: $execution_environment,
       playbook: "aap/playbooks/github-issue-gate.yml",
       ask_variables_on_launch: true,
       verbosity: 1
     }')"
   github_gate_job_template_id="$(upsert_named job_templates "eigenstate podinfo GitHub support approval gate" "${github_gate_payload}")"
-  associate_id "/job_templates/${github_gate_job_template_id}/credentials/" "${machine_credential_id}"
   associate_id "/job_templates/${github_gate_job_template_id}/credentials/" "${github_credential_id}"
 fi
 
@@ -524,5 +613,6 @@ echo "AAP demo objects are ready."
 echo "Workflow: ${WORKFLOW_NAME}"
 echo "Project: ${PROJECT_NAME}"
 echo "Inventory: ${INVENTORY_NAME}"
+echo "Execution environment: ${EE_NAME} (${EE_IMAGE})"
 echo "Native support approval: enabled"
 echo "GitHub issue gate: ${ENABLE_GITHUB_ISSUE_GATE}"

@@ -1,0 +1,94 @@
+---
+- name: Run one Eigenstate OpenShift app demo step inside the AAP EE
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    demo_repo_dir: "{{ playbook_dir }}/../.."
+    demo_runtime_dir: "{{ lookup('env', 'DEMO_DIR') | default('/tmp/demo', true) }}"
+    demo_vars_file: "{{ demo_runtime_dir }}/podinfo-vars.yml"
+    demo_kubeconfig_path: "{{ demo_runtime_dir }}/kubeconfig"
+    demo_krb5_config_path: "{{ demo_runtime_dir }}/krb5.conf"
+    demo_ipa_ca_cert_path: "{{ demo_runtime_dir }}/ipa-ca.crt"
+    allow_runtime_collection_install: "{{ lookup('env', 'ALLOW_RUNTIME_COLLECTION_INSTALL') | default('false', true) | bool }}"
+    demo_step_map:
+      deploy: playbooks/10-deploy-podinfo.yml
+      bootstrap: playbooks/00-bootstrap-idm.yml
+      identity_preflight: playbooks/15-preflight-identity.yml
+      onboard: playbooks/20-onboard-app-identity.yml
+      validate_route: playbooks/30-validate-route.yml
+      access_preflight: playbooks/35-preflight-access-policy.yml
+      open_lease: playbooks/40-open-support-lease.yml
+      validate_leased_access: playbooks/45-validate-leased-access.yml
+      expire_lease: playbooks/50-expire-support-lease.yml
+      cleanup: playbooks/90-cleanup-openshift.yml
+
+  tasks:
+    - name: Require supported demo_step
+      ansible.builtin.assert:
+        that:
+          - demo_step is defined
+          - demo_step in demo_step_map
+        fail_msg: "demo_step must be one of: {{ demo_step_map.keys() | list | join(', ') }}"
+
+    - name: Ensure EE runtime directory exists
+      ansible.builtin.file:
+        path: "{{ demo_runtime_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Write kubeconfig from AAP credential
+      ansible.builtin.copy:
+        dest: "{{ demo_kubeconfig_path }}"
+        content: "{{ lookup('env', 'DEMO_KUBECONFIG_B64') | b64decode }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Write krb5.conf from AAP credential
+      ansible.builtin.copy:
+        dest: "{{ demo_krb5_config_path }}"
+        content: "{{ lookup('env', 'DEMO_KRB5_CONFIG_B64') | b64decode }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Write IPA CA certificate from AAP credential
+      ansible.builtin.copy:
+        dest: "{{ demo_ipa_ca_cert_path }}"
+        content: "{{ lookup('env', 'DEMO_IPA_CA_CERT_B64') | b64decode }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Run selected demo step locally in the EE
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd "{{ demo_repo_dir }}"
+
+        if [[ "${ALLOW_RUNTIME_COLLECTION_INSTALL:-false}" == "true" && -f requirements.yml ]]; then
+          ansible-galaxy collection install -r requirements.yml -p .ansible/collections
+        fi
+
+        ./prepare-demo.sh
+
+        export ANSIBLE_COLLECTIONS_PATH="${PWD}/.ansible/collections:${HOME}/.ansible/collections:/usr/share/ansible/collections:/usr/local/share/ansible/collections"
+        ansible-playbook -i 'localhost,' -e "@{{ demo_vars_file }}" "{{ demo_step_map[demo_step] }}"
+      args:
+        executable: /bin/bash
+      environment:
+        ALLOW_RUNTIME_COLLECTION_INSTALL: "{{ allow_runtime_collection_install | ternary('true', 'false') }}"
+        KUBECONFIG: "{{ demo_kubeconfig_path }}"
+        KRB5_CONFIG: "{{ demo_krb5_config_path }}"
+        IPA_CERT: "{{ demo_ipa_ca_cert_path }}"
+        IPA_VERIFY: "{{ demo_ipa_ca_cert_path }}"
+        IPA_SERVER: "{{ lookup('env', 'IPA_SERVER') | default('idm-01.workshop.lan', true) }}"
+        IPA_ADMIN_PASSWORD: "{{ lookup('env', 'IPA_ADMIN_PASSWORD') | default(lookup('env', 'LAB_DEFAULT_PASSWORD'), true) }}"
+        SUPPORT_USER_PASSWORD: "{{ lookup('env', 'SUPPORT_USER_PASSWORD') | default(lookup('env', 'LAB_DEFAULT_PASSWORD'), true) }}"
+        LAB_DEFAULT_PASSWORD: "{{ lookup('env', 'LAB_DEFAULT_PASSWORD') }}"
+        REALM: "{{ lookup('env', 'REALM') | default('WORKSHOP.LAN', true) }}"
+        LEASE_DURATION: "{{ lease_duration | default('00:10', true) }}"
+      register: demo_step_run
+      changed_when: demo_step_run.rc == 0
+
+    - name: Show selected demo step output
+      ansible.builtin.debug:
+        var: demo_step_run.stdout_lines

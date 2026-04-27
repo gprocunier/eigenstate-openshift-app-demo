@@ -1,6 +1,7 @@
 ---
 - name: Wait for GitHub issue approval before opening support lease
-  hosts: bastion
+  hosts: localhost
+  connection: local
   gather_facts: false
 
   vars:

@@ -8,26 +8,29 @@ The demo proves that an OpenShift route can be onboarded through IdM-backed
 DNS, service principal, keytab, certificate issuance, vault evidence, HBAC,
 sudo, and a time-boxed support access lease. It supports two execution paths:
 
-- no-AAP: run the playbooks directly on the bastion
-- AAP: launch the same sequence through an AAP workflow
+- no-AAP: run the playbooks directly from a prepared lab shell
+- AAP: launch the same sequence through an AAP workflow and custom execution
+  environment
 
 ## Repository Layout
 
 - `prepare-demo.sh` creates `/tmp/demo/podinfo-vars.yml` from the live cluster.
-- `run-demo-no-aap.sh` runs the direct bastion sequence.
+- `run-demo-no-aap.sh` runs the direct prepared-shell sequence.
 - `run-demo-aap.sh` launches and monitors the AAP workflow.
 - `cleanup-demo.sh` expires access and removes runtime OpenShift state.
 - `requirements.yml` installs the published `eigenstate.ipa` collection.
 - `vars/podinfo.yml` contains default demo variables.
 - `playbooks/` contains the demo implementation.
 - `aap/` contains controller setup and workflow assets.
+- `execution-environment/` contains the AAP EE build definition.
 - `docs/demo-1-aap-build-plan.md` captures the AAP build plan.
 
 ## Execution Boundary
 
-Run OpenShift and IdM automation from the bastion. Use the workstation only for
-editing, publishing, and staging. The AAP workflow connects to bastion and
-executes the same validated playbooks there.
+Run OpenShift and IdM automation inside the AAP execution environment for the
+AAP path. Use the workstation for editing, publishing, staging, and building
+the EE image. The no-AAP path can still run from a prepared lab shell with
+`oc`, Kerberos, IdM client libraries, and the required Ansible collections.
 
 Expected lab defaults:
 
@@ -36,7 +39,7 @@ Expected lab defaults:
 - validation host is `mirror-registry.workshop.lan`
 - AAP route is `https://aap.apps.ocp.workshop.lan`
 
-## Bastion Setup
+## No-AAP Setup
 
 ```bash
 git clone https://github.com/gprocunier/eigenstate-openshift-app-demo.git
@@ -71,11 +74,27 @@ used by the lab.
 
 ## AAP Demo
 
-From the bastion checkout:
+Build and publish the demo EE image first:
+
+```bash
+ansible-builder build \
+  -f execution-environment/execution-environment.yml \
+  -t ghcr.io/gprocunier/eigenstate-openshift-app-demo-ee:latest \
+  .
+podman push ghcr.io/gprocunier/eigenstate-openshift-app-demo-ee:latest
+```
+
+For disconnected or mirrored builds, override
+`OPENSHIFT_CLIENT_TARBALL_URL` with a reachable OpenShift client tarball.
+
+Then run the controller setup from a shell that can read the OpenShift
+kubeconfig and IPA CA certificate:
 
 ```bash
 export AAP_PASSWORD='<controller admin password>'
 export LAB_DEFAULT_PASSWORD='<lab default password>'
+export KUBECONFIG_PATH="$HOME/etc/kubeconfig"
+export IPA_CA_CERT_PATH=/etc/ipa/ca.crt
 ./aap/setup-aap-demo.sh
 ./run-demo-aap.sh
 ```

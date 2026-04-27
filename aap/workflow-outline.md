@@ -5,8 +5,9 @@ Target route: `https://aap.apps.ocp.workshop.lan`
 Expected admin-capable IdM user: `sysop`
 
 The implemented workflow is named `eigenstate podinfo governed onboarding`.
-It runs one job template per demo step and each job template delegates to the
-bastion through `aap/playbooks/run-bastion-demo-step.yml`.
+It runs one job template per demo step. Each job template uses the custom demo
+execution environment and runs `aap/playbooks/run-ee-demo-step.yml` locally in
+the AAP job pod.
 
 ## Workflow
 
@@ -35,17 +36,20 @@ bastion through `aap/playbooks/run-bastion-demo-step.yml`.
 
 ## Credential Model
 
-- Machine credential: AAP-to-bastion SSH as `cloud-user`.
 - Custom credential type: injects the lab default password as
   `LAB_DEFAULT_PASSWORD`, `IPA_ADMIN_PASSWORD`, and `SUPPORT_USER_PASSWORD`.
+- Custom credential type: injects the OpenShift kubeconfig, `krb5.conf`, IPA
+  CA certificate, IPA server, and Kerberos realm into the EE runtime.
 - Optional GitHub issue gate credential type: injects `GITHUB_TOKEN`,
   `GITHUB_REPOSITORY`, and `GITHUB_GATE_TIMEOUT`.
-- OpenShift access: inherited from the bastion runtime through
-  `$HOME/etc/kubeconfig`.
-- IdM access: supplied to the bastion runtime through the injected environment.
+- OpenShift access: supplied to the EE as an AAP credential and written to
+  `/tmp/demo/kubeconfig`.
+- IdM access: supplied to the EE through AAP credentials and written to
+  `/tmp/demo/krb5.conf` and `/tmp/demo/ipa-ca.crt`.
 
 ## Setup Script
 
 `aap/setup-aap-demo.sh` creates the credential type, credentials, inventory,
-SCM project, survey, job templates, native approval node, optional GitHub issue
-gate, and workflow graph through the AAP controller API.
+execution environment object, SCM project, survey, job templates, native
+approval node, optional GitHub issue gate, and workflow graph through the AAP
+controller API.
